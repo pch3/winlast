@@ -26,8 +26,8 @@ def get_childs(node, tag, ns="{http://schemas.microsoft.com/win/2004/08/events/e
 
 
 def compute_duration(login, logoff):
-    duration = int((datetime.strptime(logoff, "%Y-%m-%d %H:%M:%S") - 
-                    datetime.strptime(login, "%Y-%m-%d %H:%M:%S")).total_seconds())
+    duration = int((datetime.strptime(logoff[:19], "%Y-%m-%d %H:%M:%S") - 
+                    datetime.strptime(login[:19], "%Y-%m-%d %H:%M:%S")).total_seconds())
     r = ""
     if duration >= 86400:
         r += "{}d".format(int(duration / 86400))
@@ -59,7 +59,7 @@ def format_logontype(logontype):
 
 
 def convert_to_localtime(dt, timezone):
-    utc = datetime.strptime(dt, "%Y-%m-%d %H:%M:%S").replace(tzinfo=tz.tzutc())
+    utc = datetime.strptime(dt[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=tz.tzutc())
     return utc.astimezone(tz.gettz(timezone)).strftime("%Y-%m-%d %H:%M:%S")
 
 
@@ -104,13 +104,13 @@ def main():
     for node, err in xml_records(args.evtx):
         if err is not None:
             continue
-        sys = get_child(node, "System")
-        dat = get_child(get_child(node, "EventData"), "Data")
-        eid = int(get_child(sys, "EventID").text)
+        syst = get_child(node, "System")
+        eid = int(get_child(syst, "EventID").text)
         if eid in (528, 538, 551, 4624, 4634, 4647):
             if eid == 528:
                 entry = {}
-                entry["login"]  = get_child(sys, "TimeCreated").get("SystemTime")
+                dat = get_child(get_child(node, "EventData"), "Data")
+                entry["login"]  = get_child(syst, "TimeCreated").get("SystemTime")
                 if args.tz:
                     entry["login"] = convert_to_localtime(entry["login"], args.tz)
                 entry["logoff"] = "-"
@@ -123,9 +123,24 @@ def main():
                 if len(strs) > 13:
                     entry["src"]  = strs[13].text + ":" + strs[14].text
                 last.append(entry)
+            if eid == 4624:
+                entry = {}
+                dat = get_childs(get_child(node, "EventData"), "Data")
+                entry["login"]  = get_child(syst, "TimeCreated").get("SystemTime")[:19]
+                if args.tz:
+                    entry["login"] = convert_to_localtime(entry["login"], args.tz)
+                entry["logoff"] = "-"
+                entry["duration"] = "?"
+                entry["user"]   = dat[6].text + "\\" + dat[5].text 
+                entry["id"]     = dat[7].text
+                entry["type"]   = format_logontype(dat[8].text)
+                entry["src"]    = "-:-"
+                entry["src"]  = dat[18].text + ":" + dat[19].text
+                last.append(entry)
             if eid == 538 or eid == 551:
                 entry = {}
-                entry["logoff"] = get_child(sys, "TimeCreated").get("SystemTime")            
+                dat = get_child(get_child(node, "EventData"), "Data")
+                entry["logoff"] = get_child(syst, "TimeCreated").get("SystemTime")            
                 strs = get_childs(dat, "string")
                 entry["user"]   = strs[1].text + "\\" + strs[0].text 
                 entry["id"]     = strs[2].text
@@ -136,6 +151,20 @@ def main():
                            oldentry["logoff"] = convert_to_localtime(oldentry["logoff"], args.tz) 
                         oldentry["duration"] = compute_duration(oldentry["login"], oldentry["logoff"])
                         break
+            if eid == 4634 or eid == 4647:
+                entry = {}
+                dat = get_childs(get_child(node, "EventData"), "Data")
+                entry["logoff"] = get_child(syst, "TimeCreated").get("SystemTime")[:19]
+                entry["user"]   = dat[2].text + "\\" + dat[1].text 
+                entry["id"]     = dat[3].text
+                for oldentry in last:
+                    if oldentry["user"] == entry["user"] and oldentry["id"] == entry["id"]:
+                        oldentry["logoff"] = entry["logoff"]
+                        if args.tz:
+                           oldentry["logoff"] = convert_to_localtime(oldentry["logoff"], args.tz) 
+                        oldentry["duration"] = compute_duration(oldentry["login"], oldentry["logoff"])
+                        break
+             
     print_results(last, args.output_format)
 
 if __name__ == "__main__":

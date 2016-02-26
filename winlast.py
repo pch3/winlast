@@ -1,10 +1,22 @@
 #!/usr/bin/env python
 
+#
+# dopisac sortowanie po roznych polach
+# zmienic duration na sekundy, a zmienic format podczas drukowania
+# wylapywac tez connect/diconnect 
+# dopisac lower albo upper() przy username 
+#
+#
+#
+
+
+
 from lxml import etree
 from Evtx.Evtx import Evtx
 from Evtx.Views import evtx_file_xml_view
 from datetime import datetime
 from dateutil import tz
+from operator import itemgetter
 import sys
 import argparse
 
@@ -25,7 +37,21 @@ def get_childs(node, tag, ns="{http://schemas.microsoft.com/win/2004/08/events/e
     return node.findall("%s%s" % (ns, tag))
 
 
+def new_logon_entry():
+    entry = {}    
+    entry["login"]  = "-"
+    entry["logoff"] = "-"
+    entry["duration"] = "?"
+    entry["user"]   = "?"
+    entry["id"]     = "?"
+    entry["type"]   = "?"
+    entry["src"]    = "-:-"
+    return entry
+
+
 def compute_duration(login, logoff):
+    if login == "-" or logoff == "-":
+        return "?"
     duration = int((datetime.strptime(logoff[:19], "%Y-%m-%d %H:%M:%S") - 
                     datetime.strptime(login[:19], "%Y-%m-%d %H:%M:%S")).total_seconds())
     r = ""
@@ -43,7 +69,8 @@ def compute_duration(login, logoff):
 
 
 def format_logontype(logontype):
-    logon_types = { "2":"Interactive", 
+    logon_types = { "0":"System Only",
+                    "2":"Interactive", 
                     "3":"Network", 
                     "4":"Batch", 
                     "5":"Service", 
@@ -55,7 +82,7 @@ def format_logontype(logontype):
                    "11":"CachedI",
                    "12":"CachedRI",
                    "13":"CachedU"}
-    return logon_types[logontype]
+    return logon_types.get(logontype, 'UNKNOWN')
 
 
 def convert_to_localtime(dt, timezone):
@@ -70,6 +97,10 @@ def check_timezone(timezone):
       sys.exit(1)
 
 
+def sort_results(entries, sort_type="none"):
+    return
+
+
 def print_results(result, output_format="table"):
     if output_format == "csv":
         row_formated="{},{},{},{},{},{}"
@@ -78,7 +109,8 @@ def print_results(result, output_format="table"):
     else:
         row_formated="{:30} {:20} {:20} {:>12} {:>12} {:21}"
     print row_formated.format("User", "Login", "Logoff", "Duration", "Type", "Src")
-    for entry in result:
+
+    for (key, entry) in sorted(result.iteritems(), key=lambda(x, y): y['user']):
         print row_formated.format(entry["user"], 
                                   entry["login"], 
                                   entry["logoff"], 
@@ -96,75 +128,88 @@ def main():
                         help="Convert UTC timestamps to timezone, e.g. 'Europe/Warsaw'")
     parser.add_argument("-f", "--format", type=str, action="store", dest="output_format",
                         help="Output format", choices=("table", "csv", "csv_tab"))
+#    parser.add_argument("-u", "--sub", type=str, action="store", dest="sub",
+#                        help="Consider disconnect/reconnect as logoff/login")
+#    parser.add_argument("-s", "--sort", type=str, action="store", dest="sort",
+#                        help="Sort by: none, Login time, Logoff time, username")
     parser.add_argument("-v", "--version", action="version", version="%(prog)s by Piotr Chmylkowski ver. 0.1")
     args = parser.parse_args()
     if args.tz:
         check_timezone(args.tz)
-    last = []
+    last = {}
     for node, err in xml_records(args.evtx):
         if err is not None:
             continue
         syst = get_child(node, "System")
         eid = int(get_child(syst, "EventID").text)
         if eid in (528, 538, 551, 4624, 4634, 4647):
+            # logon 
             if eid == 528:
-                entry = {}
+                entry = new_logon_entry()
                 dat = get_child(get_child(node, "EventData"), "Data")
                 entry["login"]  = get_child(syst, "TimeCreated").get("SystemTime")
                 if args.tz:
                     entry["login"] = convert_to_localtime(entry["login"], args.tz)
-                entry["logoff"] = "-"
-                entry["duration"] = "?"
-                strs = get_childs(dat, "string")
-                entry["user"]   = strs[1].text + "\\" + strs[0].text 
+                dupa = "<dupa>"+dat.text.strip()+"</dupa>"
+                strs = etree.fromstring(dupa).getchildren()
+                entry["user"]   = strs[1].text.upper() + "\\" + strs[0].text.upper()
                 entry["id"]     = strs[2].text
                 entry["type"]   = format_logontype(strs[3].text)
-                entry["src"]    = "-:-"
                 if len(strs) > 13:
                     entry["src"]  = strs[13].text + ":" + strs[14].text
-                last.append(entry)
-            if eid == 4624:
-                entry = {}
+                key = entry["user"] + entry["id"]
+                last[key] = entry
+            # logon 
+            elif eid == 4624:
+                entry = new_logon_entry()
                 dat = get_childs(get_child(node, "EventData"), "Data")
                 entry["login"]  = get_child(syst, "TimeCreated").get("SystemTime")[:19]
                 if args.tz:
                     entry["login"] = convert_to_localtime(entry["login"], args.tz)
-                entry["logoff"] = "-"
-                entry["duration"] = "?"
-                entry["user"]   = dat[6].text + "\\" + dat[5].text 
+                entry["user"]   = dat[6].text.upper() + "\\" + dat[5].text.upper()
                 entry["id"]     = dat[7].text
                 entry["type"]   = format_logontype(dat[8].text)
-                entry["src"]    = "-:-"
                 entry["src"]  = dat[18].text + ":" + dat[19].text
-                last.append(entry)
-            if eid == 538 or eid == 551:
-                entry = {}
+                key = entry["user"] + entry["id"]
+                if not last.has_key(key):
+                    last[key] = []
+                last[key].append(entry)
+            # logoff
+            elif eid == 538 or eid == 551:
+                entry = new_logon_entry()
                 dat = get_child(get_child(node, "EventData"), "Data")
                 entry["logoff"] = get_child(syst, "TimeCreated").get("SystemTime")            
-                strs = get_childs(dat, "string")
-                entry["user"]   = strs[1].text + "\\" + strs[0].text 
+                dupa = "<dupa>"+dat.text.strip()+"</dupa>"
+                strs = etree.fromstring(dupa).getchildren()
+                entry["user"]   = strs[1].text.upper() + "\\" + strs[0].text.upper()
                 entry["id"]     = strs[2].text
-                for oldentry in last:
-                    if oldentry["user"] == entry["user"] and oldentry["id"] == entry["id"]:
-                        oldentry["logoff"] = entry["logoff"]
-                        if args.tz:
-                           oldentry["logoff"] = convert_to_localtime(oldentry["logoff"], args.tz) 
-                        oldentry["duration"] = compute_duration(oldentry["login"], oldentry["logoff"])
-                        break
-            if eid == 4634 or eid == 4647:
-                entry = {}
+                key = entry["user"] + entry["id"]
+                if not last.has_key(key):
+                    last[key] = entry
+                else:
+                    if last[key]["logoff"] == "-":
+                        last[key]["logoff"] = entry["logoff"]
+                    if args.tz:
+                        last[key]["logoff"] = convert_to_localtime(last[key]["logoff"], args.tz) 
+                    last[key]["duration"] = compute_duration(last[key]["login"], last[key]["logoff"])
+            # logoff
+            elif eid == 4634 or eid == 4647:
+                entry = new_logon_entry()
                 dat = get_childs(get_child(node, "EventData"), "Data")
                 entry["logoff"] = get_child(syst, "TimeCreated").get("SystemTime")[:19]
-                entry["user"]   = dat[2].text + "\\" + dat[1].text 
+                entry["user"]   = dat[2].text.upper() + "\\" + dat[1].text.upper()
                 entry["id"]     = dat[3].text
-                for oldentry in last:
-                    if oldentry["user"] == entry["user"] and oldentry["id"] == entry["id"]:
-                        oldentry["logoff"] = entry["logoff"]
-                        if args.tz:
-                           oldentry["logoff"] = convert_to_localtime(oldentry["logoff"], args.tz) 
-                        oldentry["duration"] = compute_duration(oldentry["login"], oldentry["logoff"])
-                        break
-             
+                key = entry["user"] + entry["id"]
+                if not last.has_key(key):
+                    last[key] = []
+                    last[key].append(entry)
+                else:
+                    le = last[key][len(last[key]) - 1]
+                    if le["logoff"] == "-":
+                        le["logoff"] = entry["logoff"]
+                    if args.tz:
+                        le["logoff"] = convert_to_localtime(le["logoff"], args.tz) 
+                    le["duration"] = compute_duration(le["login"], le["logoff"])
     print_results(last, args.output_format)
 
 if __name__ == "__main__":

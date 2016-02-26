@@ -5,7 +5,7 @@
 # zmienic duration na sekundy, a zmienic format podczas drukowania
 # wylapywac tez connect/diconnect 
 # dopisac lower albo upper() przy username 
-#
+# fall back to UTC jak nieprawidlowa strefa ??
 #
 #
 
@@ -97,11 +97,7 @@ def check_timezone(timezone):
       sys.exit(1)
 
 
-def sort_results(entries, sort_type="none"):
-    return
-
-
-def print_results(result, output_format="table"):
+def print_results(result, output_format="table", sort_type="login"):
     if output_format == "csv":
         row_formated="{},{},{},{},{},{}"
     elif output_format == "csv_tab":
@@ -110,7 +106,7 @@ def print_results(result, output_format="table"):
         row_formated="{:30} {:20} {:20} {:>12} {:>12} {:21}"
     print row_formated.format("User", "Login", "Logoff", "Duration", "Type", "Src")
 
-    for (key, entry) in sorted(result.iteritems(), key=lambda(x, y): y['user']):
+    for (key, entry) in sorted(result.iteritems(), key=lambda(x, y): y[sort_type]):
         print row_formated.format(entry["user"], 
                                   entry["login"], 
                                   entry["logoff"], 
@@ -130,8 +126,8 @@ def main():
                         help="Output format", choices=("table", "csv", "csv_tab"))
 #    parser.add_argument("-u", "--sub", type=str, action="store", dest="sub",
 #                        help="Consider disconnect/reconnect as logoff/login")
-#    parser.add_argument("-s", "--sort", type=str, action="store", dest="sort",
-#                        help="Sort by: none, Login time, Logoff time, username")
+    parser.add_argument("-s", "--sort", type=str, action="store", dest="sort_type",
+                        help="Sort by...", choices=("login", "logoff", "user", "duration", "type", "src"))
     parser.add_argument("-v", "--version", action="version", version="%(prog)s by Piotr Chmylkowski ver. 0.1")
     args = parser.parse_args()
     if args.tz:

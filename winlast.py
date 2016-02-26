@@ -12,6 +12,7 @@ from operator import itemgetter
 import sys
 import argparse
 
+
 def xml_records(filename):
     try:
         with Evtx(filename) as evtx:
@@ -22,7 +23,8 @@ def xml_records(filename):
                     yield xml, e
     except IOError as e:
         print "Error: Cannot open file {}".format(filename)
-        sys.exit(3)
+        sys.exit(2)
+
 
 def get_child(node, tag, ns="{http://schemas.microsoft.com/win/2004/08/events/event}"):
     return node.find("%s%s" % (ns, tag))
@@ -108,8 +110,10 @@ def print_results(result, args):
         if args.tz:
             entry["login"] = convert_to_localtime(entry["login"], args.tz)
             entry["logoff"] = convert_to_localtime(entry["logoff"], args.tz)
-        if entry["duration"] != "?" and not args.dont_convert:
+        if not args.dc_duration and entry["duration"] != "?":
             entry["duration"] = format_duration(entry["duration"])
+        if not args.dc_type:
+            entry["type"] = format_logontype(entry["type"])
         print row_formated.format(entry["user"], 
                                   entry["login"], 
                                   entry["logoff"], 
@@ -126,15 +130,17 @@ def main():
                         help="Path to the Windows EVTX file")
     parser.add_argument("-t", type=str, action="store", dest="tz",
                         help="Convert UTC timestamps to timezone, e.g. 'Europe/Warsaw'")
-    parser.add_argument("-d", action="store_true", dest="dont_convert",
+    parser.add_argument("-d", action="store_true", dest="dc_duration",
                         help="Print duration in seconds")
+    parser.add_argument("-n", action="store_true", dest="dc_type",
+                        help="Print numeric logon type")
     parser.add_argument("-f", type=str, action="store", dest="output_format",
                         help="Output format", choices=("table", "csv", "csv_tab"), default="table")
 #    parser.add_argument("-u", "--sub", type=str, action="store", dest="sub",
 #                        help="Consider disconnect/reconnect as logoff/login")
     parser.add_argument("-s", type=str, action="store", dest="sort_type",
                         help="Sort by...", choices=("login", "logoff", "user", "duration", "type", "src"), default="login")
-    parser.add_argument("-v", action="version", version="%(prog)s by Piotr Chmylkowski ver. 0.1")
+    parser.add_argument("-v", action="version", version="%(prog)s by Piotr Chmylkowski ver. 0.2")
     args = parser.parse_args()
     if args.tz:
         check_timezone(args.tz)
@@ -144,7 +150,7 @@ def main():
             continue
         syst = get_child(node, "System")
         eid = int(get_child(syst, "EventID").text)
-        print "Processing EventID={}\r".format(eid),
+        print "\033[?25lProcessing EventID={}\r".format(eid),
         if eid in (528, 538, 551, 4624, 4634, 4647):
             # logon 
             if eid == 528:
@@ -201,6 +207,7 @@ def main():
                     if last[key]["logoff"] == "-":
                         last[key]["logoff"] = entry["logoff"]
                     last[key]["duration"] = compute_duration(last[key]["login"], last[key]["logoff"])
+    sys.stdout.write("\033[?25h")
     print_results(last, args)
 
 if __name__ == "__main__":

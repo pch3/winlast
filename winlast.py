@@ -12,6 +12,7 @@ from operator import itemgetter
 import sys
 import argparse
 
+VERSION = "0.3"
 
 def xml_records(filename):
     try:
@@ -156,7 +157,7 @@ def main():
                         help="Sort by...", choices=("login", "logoff", "user", "duration", "type", "src"), default="login")
     parser.add_argument("-q", action="store_true", dest="quiet",
                         help="Suppress all normal output")
-    parser.add_argument("-v", action="version", version="%(prog)s by Piotr Chmylkowski ver. 0.2")
+    parser.add_argument("-v", action="version", version="%(prog)s by Piotr Chmylkowski ver. {}".format(VERSION))
     args = parser.parse_args()
     if args.tz:
         check_timezone(args.tz)
@@ -194,7 +195,7 @@ def main():
                 entry["login"]  = get_child(syst, "TimeCreated").get("SystemTime")[:19]
                 entry["user"]   = dat[6].text.upper() + "\\" + dat[5].text.upper()
                 entry["id"]     = dat[7].text
-                entry["type"]   = format_logontype(dat[8].text)
+                entry["type"]   = dat[8].text
                 entry["src"]  = dat[18].text + ":" + dat[19].text
                 key = entry["user"] + entry["id"]
                 last[key] = entry

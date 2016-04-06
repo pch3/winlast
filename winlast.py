@@ -22,7 +22,7 @@ def xml_records(filename):
                 except etree.XMLSyntaxError as e:
                     yield xml, e
     except IOError as e:
-        print "Error: Cannot open file {}".format(filename)
+        sys.stderr.write("Error: Cannot open file {}\n".format(filename))
         sys.exit(2)
 
 
@@ -70,7 +70,7 @@ def format_duration(s):
 
 
 def format_logontype(logontype):
-    logon_types = { "0":"System Only",
+    logon_types = { "0":"SystemOnly",
                     "2":"Interactive", 
                     "3":"Network", 
                     "4":"Batch", 
@@ -83,29 +83,40 @@ def format_logontype(logontype):
                    "11":"CachedI",
                    "12":"CachedRI",
                    "13":"CachedU"}
-    return logon_types.get(logontype, 'UNKNOWN')
+    return logon_types.get(logontype, '?')
 
 
 def convert_to_localtime(dt, timezone):
-    utc = datetime.strptime(dt[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=tz.tzutc())
-    return utc.astimezone(tz.gettz(timezone)).strftime("%Y-%m-%d %H:%M:%S")
+    if dt != "-":
+      utc = datetime.strptime(dt[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=tz.tzutc())
+      return utc.astimezone(tz.gettz(timezone)).strftime("%Y-%m-%d %H:%M:%S")
+    else:
+      return "-"
 
 
 def check_timezone(timezone):
     if tz.gettz(timezone) == None:
-      print "Timezone not recognized. Please use zoneinfo TZ format, e.g. Europe/Warsaw"
-      print "https://en.wikipedia.org/wiki/List_of_tz_database_time_zones"
+      sys.stderr.write("Timezone not recognized. Please use zoneinfo TZ format, e.g. Europe/Warsaw\n")
+      sys.stderr.write("https://en.wikipedia.org/wiki/List_of_tz_database_time_zones\n")
       sys.exit(1)
 
 
 def print_results(result, args):
     if args.output_format == "csv":
-        row_formated="{},{},{},{},{},{}"
+        row_formated="{},{},{},{},{},{}\n"
     elif args.output_format == "csv_tab":
-        row_formated="{}\t{}\t{}\t{}\t{}\t{}"
+        row_formated="{}\t{}\t{}\t{}\t{}\t{}\n"
     else:
-        row_formated="{:30} {:20} {:20} {:>14} {:>12} {:21}"
-    print row_formated.format("User", "Login", "Logoff", "Duration", "Type", "Src")
+        row_formated="{:30} {:20} {:20} {:>14} {:>12} {:21}\n"
+    if args.outfile:
+        try:
+            output = open(args.outfile, "w")
+        except IOError:
+            sys.stderr.write("Cannot open file {} for writing!\n")
+            output = sys.stdout
+    else:
+        output = sys.stdout
+    output.write(row_formated.format("User", "Login", "Logoff", "Duration", "Type", "Src"))
     for (key, entry) in sorted(result.iteritems(), key=lambda(x, y): y[args.sort_type]):
         if args.tz:
             entry["login"] = convert_to_localtime(entry["login"], args.tz)
@@ -114,12 +125,13 @@ def print_results(result, args):
             entry["duration"] = format_duration(entry["duration"])
         if not args.dc_type:
             entry["type"] = format_logontype(entry["type"])
-        print row_formated.format(entry["user"], 
+        output.write(row_formated.format(entry["user"], 
                                   entry["login"], 
                                   entry["logoff"], 
                                   entry["duration"], 
                                   entry["type"], 
-                                  entry["src"])
+                                  entry["src"]))
+    output.close()
 
 
 def main():
@@ -136,21 +148,30 @@ def main():
                         help="Print numeric logon type")
     parser.add_argument("-f", type=str, action="store", dest="output_format",
                         help="Output format", choices=("table", "csv", "csv_tab"), default="table")
-#    parser.add_argument("-u", "--sub", type=str, action="store", dest="sub",
+#    parser.add_argument("-u", type=str, action="store", dest="sub",
 #                        help="Consider disconnect/reconnect as logoff/login")
+    parser.add_argument("-o", type=str, action="store", dest="outfile",
+                        help="Write results to file")
     parser.add_argument("-s", type=str, action="store", dest="sort_type",
                         help="Sort by...", choices=("login", "logoff", "user", "duration", "type", "src"), default="login")
+    parser.add_argument("-q", action="store_true", dest="quiet",
+                        help="Suppress all normal output")
     parser.add_argument("-v", action="version", version="%(prog)s by Piotr Chmylkowski ver. 0.2")
     args = parser.parse_args()
     if args.tz:
         check_timezone(args.tz)
     last = {}
+    counter = 0
+    if not args.quiet:
+        sys.stdout.write("\033[?25l")
     for node, err in xml_records(args.evtx):
         if err is not None:
             continue
         syst = get_child(node, "System")
         eid = int(get_child(syst, "EventID").text)
-        print "\033[?25lProcessing EventID={}\r".format(eid),
+        if not args.quiet:
+            sys.stdout.write("Processing record no {} (EventID={})\r".format(counter, eid))
+        counter += 1
         if eid in (528, 538, 551, 4624, 4634, 4647):
             # logon 
             if eid == 528:
@@ -207,7 +228,8 @@ def main():
                     if last[key]["logoff"] == "-":
                         last[key]["logoff"] = entry["logoff"]
                     last[key]["duration"] = compute_duration(last[key]["login"], last[key]["logoff"])
-    sys.stdout.write("\033[?25h")
+    if not args.quiet:
+        sys.stdout.write("\r\nWriting results...\n\033[?25h")
     print_results(last, args)
 
 if __name__ == "__main__":

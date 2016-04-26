@@ -8,8 +8,28 @@ from dateutil import tz
 from operator import itemgetter
 import sys
 import argparse
+import signal
 
-VERSION = "0.4"
+VERSION = "0.5"
+
+def total_records(args):
+    try:
+        if not args.quiet:
+            sys.stderr.write("Calculating total number of records... ")
+        total = 0
+        with Evtx(args.evtx) as evtx:
+            fh = evtx.get_file_header()
+            for chunk in fh.chunks():
+                first_record = chunk.log_first_record_number()
+                last_record = chunk.log_last_record_number()
+                total += 1 + last_record - first_record
+            if not args.quiet:
+                sys.stderr.write(str(total) + "\n")
+            return total
+    except IOError as e:
+        sys.stderr.write("Error: Cannot open file {}\n".format(filename))
+        sys.exit(2)
+
 
 def xml_records(filename):
     try:
@@ -176,7 +196,7 @@ def main():
         prog = "winlast.py")
     parser.add_argument("evtx", type=str, action="store", 
                         help="Path to the Windows EVTX file")
-    parser.add_argument("-t", type=str, action="store", dest="tz",
+    parser.add_argument("-z", type=str, action="store", dest="tz",
                         help="Convert UTC timestamps to timezone, e.g. 'Europe/Warsaw'")
     parser.add_argument("-d", action="store_true", dest="dc_duration",
                         help="Print duration in seconds")
@@ -194,20 +214,28 @@ def main():
                         help="Suppress all normal output")
     parser.add_argument("-v", action="version", version="%(prog)s by Piotr Chmylkowski ver. {}".format(VERSION))
     args = parser.parse_args()
+    def signal_handler(signum, frame):
+        if not args.quiet:
+            sys.stderr.write("\r\nAborting...\n\033[?25h")
+        sys.exit(0)
+    signal.signal(signal.SIGINT, signal_handler)
     if args.tz:
         check_timezone(args.tz)
     last = {}
     counter = 0
     if not args.quiet:
-        sys.stdout.write("\033[?25l")
+        sys.stderr.write("\033[?25l")
+    total = total_records(args)
     for node, err in xml_records(args.evtx):
+        counter += 1
         if err is not None:
+            if not args.quiet:
+                sys.stderr.write("Error: " + str(err) + "\n")
             continue
         syst = get_child(node, "System")
         eid = int(get_child(syst, "EventID").text)
         if not args.quiet:
-            sys.stdout.write("Processing record no {} (EventID={})\r".format(counter, eid))
-        counter += 1
+            sys.stderr.write("Processing record no {} ({}%)\r".format(counter, int(counter*100/total)))
         if eid in (528, 538, 551, 682, 683, 4624, 4634, 4647, 4778, 4779):
             # logon 
             if eid == 528:
@@ -268,7 +296,7 @@ def main():
             elif eid == 4778:
                 e = {}
                 e["stype"] = "Reconnect"
-                e["time"] = get_child(syst, "TimeCreated").get("SystemTime")
+                e["time"] = get_child(syst, "TimeCreated").get("SystemTime")[:19]
                 dat = get_childs(get_child(node, "EventData"), "Data")
                 e["src"]  = dat[5].text #+ "(" + dat[4].text + ")"
                 key = dat[1].text.upper() + "\\" + dat[0].text.upper() + dat[2].text
@@ -290,7 +318,7 @@ def main():
             elif eid == 4779:
                 e = {}
                 e["stype"] = "Disconnect"
-                e["time"] = get_child(syst, "TimeCreated").get("SystemTime")
+                e["time"] = get_child(syst, "TimeCreated").get("SystemTime")[:19]
                 dat = get_childs(get_child(node, "EventData"), "Data")
                 e["src"]  = dat[5].text #+ "(" + dat[4].text + ")"
                 key = dat[1].text.upper() + "\\" + dat[0].text.upper() + dat[2].text
@@ -309,7 +337,7 @@ def main():
                 if last.has_key(key):
                     last[key]["sub"].append(e)
     if not args.quiet:
-        sys.stdout.write("\r\nWriting results...\n\033[?25h")
+        sys.stderr.write("\r\nWriting results...\n\033[?25h")
     print_results(last, args)
 
 if __name__ == "__main__":

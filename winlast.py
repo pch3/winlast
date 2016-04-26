@@ -1,8 +1,5 @@
 #!/usr/bin/env python
 
-# TODO:
-# Report RDP connect/diconnect events
-
 from lxml import etree
 from Evtx.Evtx import Evtx
 from Evtx.Views import evtx_file_xml_view
@@ -12,7 +9,7 @@ from operator import itemgetter
 import sys
 import argparse
 
-VERSION = "0.3"
+VERSION = "0.4"
 
 def xml_records(filename):
     try:
@@ -44,6 +41,7 @@ def new_logon_entry():
     entry["id"]     = "?"
     entry["type"]   = "?"
     entry["src"]    = "-:-"
+    entry['sub'] = []
     return entry
 
 
@@ -55,18 +53,21 @@ def compute_duration(login, logoff):
 
 
 def format_duration(s):
-    r = ""
-    duration = int(s)
-    if duration >= 86400:
-        r += "{}d".format(int(duration / 86400))
-        duration = duration % 86400
-    if duration >= 3600:
-        r += "{}h".format(int(duration / 3600))
-        duration = duration % 3600
-    if duration >= 60:
-        r+= "{}m".format(int(duration / 60))
-        duration = duration % 60
-    r += "{}s".format(duration)
+    if s == "?":
+        r = "?"
+    else:
+        r = ""
+        duration = int(s)
+        if duration >= 86400:
+            r += "{}d".format(int(duration / 86400))
+            duration = duration % 86400
+        if duration >= 3600:
+            r += "{}h".format(int(duration / 3600))
+            duration = duration % 3600
+        if duration >= 60:
+            r+= "{}m".format(int(duration / 60))
+            duration = duration % 60
+        r += "{}s".format(duration)
     return r
 
 
@@ -83,7 +84,8 @@ def format_logontype(logontype):
                    "10":"RemoteI", 
                    "11":"CachedI",
                    "12":"CachedRI",
-                   "13":"CachedU"}
+                   "13":"CachedU"
+                  }
     return logon_types.get(logontype, '?')
 
 
@@ -113,7 +115,7 @@ def print_results(result, args):
         try:
             output = open(args.outfile, "w")
         except IOError:
-            sys.stderr.write("Cannot open file {} for writing!\n")
+            sys.stderr.write("Cannot open file {} for writing!\n".format(args.outfile))
             output = sys.stdout
     else:
         output = sys.stdout
@@ -122,16 +124,49 @@ def print_results(result, args):
         if args.tz:
             entry["login"] = convert_to_localtime(entry["login"], args.tz)
             entry["logoff"] = convert_to_localtime(entry["logoff"], args.tz)
-        if not args.dc_duration and entry["duration"] != "?":
+        if not args.dc_duration:
             entry["duration"] = format_duration(entry["duration"])
         if not args.dc_type:
             entry["type"] = format_logontype(entry["type"])
         output.write(row_formated.format(entry["user"], 
-                                  entry["login"], 
-                                  entry["logoff"], 
-                                  entry["duration"], 
-                                  entry["type"], 
-                                  entry["src"]))
+                                         entry["login"], 
+                                         entry["logoff"], 
+                                         entry["duration"], 
+                                         entry["type"], 
+                                         entry["src"]
+                                        ))
+        if not args.sub:
+            if args.tz:
+                for e in entry["sub"]:
+                     e["time"] = convert_to_localtime(e["time"], args.tz)
+            l = len(entry["sub"])
+            for i in range(0, len(entry["sub"]), 2):
+                if entry["sub"][i]["stype"] == "Disconnect":
+                    if i == 0:
+                        login = entry["login"]
+                        typ = "Logon/Dis"
+                    else:
+                        login = entry["sub"][i-1]["time"]
+                        typ = "Rec/Dis"
+                    logoff = entry["sub"][i]["time"]
+                else:
+                    if i+1 < l:
+                        logoff = entry["sub"][i+1]["time"]
+                        typ = "Rec/Dis"
+                    else:
+                        logoff = entry["logoff"]
+                        typ = "Rec/Logoff"
+                    login  = entry["sub"][i]["time"]
+                duration = compute_duration(login, logoff)
+                if not args.dc_duration:
+                    duration = format_duration(duration)
+                output.write(row_formated.format("",
+                                                 login,
+                                                 logoff,
+                                                 duration,
+                                                 typ,
+                                                 entry["sub"][i]["src"]
+                                                ))
     output.close()
 
 
@@ -149,8 +184,8 @@ def main():
                         help="Print numeric logon type")
     parser.add_argument("-f", type=str, action="store", dest="output_format",
                         help="Output format", choices=("table", "csv", "csv_tab"), default="table")
-#    parser.add_argument("-u", type=str, action="store", dest="sub",
-#                        help="Consider disconnect/reconnect as logoff/login")
+    parser.add_argument("-u", action="store_true", dest="sub",
+                        help="Do not print disconnect/reconnect events")
     parser.add_argument("-o", type=str, action="store", dest="outfile",
                         help="Write results to file")
     parser.add_argument("-s", type=str, action="store", dest="sort_type",
@@ -173,7 +208,7 @@ def main():
         if not args.quiet:
             sys.stdout.write("Processing record no {} (EventID={})\r".format(counter, eid))
         counter += 1
-        if eid in (528, 538, 551, 4624, 4634, 4647):
+        if eid in (528, 538, 551, 682, 683, 4624, 4634, 4647, 4778, 4779):
             # logon 
             if eid == 528:
                 entry = new_logon_entry()
@@ -229,6 +264,50 @@ def main():
                     if last[key]["logoff"] == "-":
                         last[key]["logoff"] = entry["logoff"]
                     last[key]["duration"] = compute_duration(last[key]["login"], last[key]["logoff"])
+            # reconnect
+            elif eid == 4778:
+                e = {}
+                e["stype"] = "Reconnect"
+                e["time"] = get_child(syst, "TimeCreated").get("SystemTime")
+                dat = get_childs(get_child(node, "EventData"), "Data")
+                e["src"]  = dat[5].text #+ "(" + dat[4].text + ")"
+                key = dat[1].text.upper() + "\\" + dat[0].text.upper() + dat[2].text
+                if last.has_key(key):
+                    last[key]["sub"].append(e)
+            # reconnect
+            elif eid == 682:
+                e = {}
+                e["stype"] = "Reconnect"
+                e["time"] = get_child(syst, "TimeCreated").get("SystemTime")
+                dat = get_child(get_child(node, "EventData"), "Data")
+                dupa = "<dupa>"+dat.text.strip()+"</dupa>"
+                strs = etree.fromstring(dupa).getchildren()
+                e["src"]    = strs[5].text #+ "(" + strs[4].text + ")"
+                key = strs[1].text.upper() + "\\" + strs[0].text.upper() + strs[2].text
+                if last.has_key(key):
+                    last[key]["sub"].append(e)
+            # disconnect
+            elif eid == 4779:
+                e = {}
+                e["stype"] = "Disconnect"
+                e["time"] = get_child(syst, "TimeCreated").get("SystemTime")
+                dat = get_childs(get_child(node, "EventData"), "Data")
+                e["src"]  = dat[5].text #+ "(" + dat[4].text + ")"
+                key = dat[1].text.upper() + "\\" + dat[0].text.upper() + dat[2].text
+                if last.has_key(key):
+                    last[key]["sub"].append(e)
+            # disconnect
+            elif eid == 683:
+                e = {}
+                e["stype"] = "Disconnect"
+                e["time"] = get_child(syst, "TimeCreated").get("SystemTime")            
+                dat = get_child(get_child(node, "EventData"), "Data")
+                dupa = "<dupa>"+dat.text.strip()+"</dupa>"
+                strs = etree.fromstring(dupa).getchildren()
+                e["src"]    = strs[5].text #+ "(" + strs[4].text + ")"
+                key = strs[1].text.upper() + "\\" + strs[0].text.upper() + strs[2].text
+                if last.has_key(key):
+                    last[key]["sub"].append(e)
     if not args.quiet:
         sys.stdout.write("\r\nWriting results...\n\033[?25h")
     print_results(last, args)
